@@ -1,0 +1,305 @@
+---
+title: 'HUDK4051: Prediction - Comparing Trees'
+author: "Vidya Madhavan"
+date: "06/04/2021"
+output:
+pdf_document: default
+html_document: default
+---
+
+The aim of this project is to model student data to predict particular decisions using three different tree algorithms - the CART, C4.5 (Conditional Inference Tree) and C5.0. We will be using these algorithms to attempt to predict which students drop out of courses. Many universities have a problem with students over-enrolling in courses at the beginning of semester and then dropping most of them as the make decisions about which classes to attend. This makes it difficult to plan for the semester and allocate resources. However, schools do not want to restrict the choice of their students. One solution is to create predictions of which students are likely to drop out of which courses, and use these predictions to carry out better informed semester planning. 
+
+
+## Software
+
+In order to generate our models we need the following packages:
+- The [caret](https://cran.r-project.org/web/packages/caret/index.html) package, which brings all the different prediction package algorithms under one hood using the same syntax. 
+- An algorithm from the [Weka suite](https://www.cs.waikato.ac.nz/~ml/weka/). Weka is a collection of machine learning algorithms that have been implemented in Java and made freely available by the University of Waikato in New Zealand. To access these algorithms we will need to first install both the [Java Runtime Environment (JRE) and Java Development Kit](http://www.oracle.com/technetwork/java/javase/downloads/jre9-downloads-3848532.html) on our machine. We then install the [RWeka](https://cran.r-project.org/web/packages/RWeka/index.html) package within R.
+- The [C50](https://cran.r-project.org/web/packages/C50/index.html) package.
+
+## Data
+
+The data used here comes from a university registrar's office. The code book for the variables are available in the file code-book.txt. 
+
+We begin by uploading the drop-out.csv data into R as a data frame. 
+
+```{r}
+library(C50)
+library(caret)
+library(RWeka)
+library(tidyverse)
+library(GGally)
+library(lubridate)
+library(party)
+```
+```{r}
+drop_out <- read.csv("drop-out.csv")
+```
+The next step is to separate our data set into a training set and a test set. We randomly select 25% of the students to be the test data set and leave the remaining 75% for your training data set.
+
+```{r}
+set.seed(1313)
+ drop_out <- drop_out %>% mutate(student_id = as.factor(student_id), course_id = as.factor(course_id), gender = as.factor(gender),enroll_date_time = as.POSIXct(enroll_date_time, origin = "2010-01-01", tz = "GMT"),complete = factor(complete, levels = c("no","yes")),international = factor(international, levels = c("no","yes")), online = factor(online, levels = c("no","yes")))
+
+```
+
+```{r}
+perc_75 <- (unique(drop_out$student_id) %>% length) * .75
+perc_75 <- perc_75 %>% round
+train_ids <- sample(unique(drop_out$student_id))[1:perc_75]
+drop_out <- drop_out %>% mutate(type = ifelse(student_id %in% train_ids, "train", "test"))
+drop_out_train <- drop_out %>% filter(type == "train") 
+drop_out_test <- drop_out %>% filter(type == "test") 
+```
+ 
+In this project, we intend to predict the parameter of 'Complete' which refers to completing a course.
+
+We begin visualizing the relationships between our chosen variables as a scatterplot matrix.  Based on this visualizarion, we notice that the categorical variables do not render proper visualizations.
+
+
+```{r}
+pairs(~complete + years + entrance_test_score+ courses_taken + enroll_date_time + international + online + gender + course_id,data = drop_out, col = factor(drop_out$complete))
+```
+
+
+```{r}
+ggplot(drop_out, 
+       aes(y = years, 
+           x = complete)) +
+  geom_jitter() + 
+  labs(title = "Complete Vs Year")
+```
+
+```{r}
+ggplot(drop_out, 
+       aes(y = entrance_test_score, 
+           x = complete)) +
+  geom_jitter() + 
+  labs(title = "Complete Vs Entrance scores")
+```
+```{r}
+ggplot(drop_out, 
+       aes(y = gender, 
+           x = complete)) +
+  geom_jitter() + 
+  labs(title = "Complete Vs Gender")
+```
+```{r}
+ggplot(drop_out, 
+       aes(y = courses_taken, 
+           x = complete)) +
+  geom_jitter() + 
+  labs(title = "Complete Vs Courses")
+```
+```{r}
+ggplot(drop_out, 
+       aes(y = international, 
+           x = complete)) +
+  geom_jitter() + 
+  labs(title = "Complete Vs International")
+```
+```{r}
+ggplot(drop_out, 
+       aes(y = online, 
+           x = complete)) +
+  geom_jitter() + 
+  labs(title = "Complete Vs online")
+```
+```{r}
+ggplot(drop_out, 
+       aes(y = course_id, 
+           x = complete)) +
+  geom_jitter() + 
+  labs(title = "Complete Vs Course id")
+```
+In order to approximately visualize our categorical variables, we introduce jitter onto the scatterplots.
+```{r}
+
+pdf(file = "/Users/vidyamadhavan/Desktop/HUDK\ 4050/HUDK\ 4051\ SQL\ +\ Pred/prediction/SCP_matrix.pdf",   
+    # The directory you want to save the file in
+     width = 10, # The width of the plot in inches
+     height = 10) # The height of the plot in inches
+
+ggpairs(drop_out %>% select(-type,-student_id,-course_id), progress = F,upper =list(continuous = wrap("cor", size=5),lower = list(continuous = wrap("points", position = position_jitter(height = 3, width = 3)))))
+                                                                                                                                          
+dev.off()
+
+```
+From the individual scatterplots that I generated, I tried to make meaningful inferences pertaining to course completion in relation with other variables in the dataset. Since our variable of interest is categorical, I used jitter in order to overcome overpopulation. From the graphs, we can see the following:
+1. All the students who have completed are have been enrolled in the course for '0' years.
+2. There seems to be very few dropouts from the the courses with IDs beginning with 8. This could be due to naturally low enrolment as well.
+
+## CART Trees
+
+We now construct a classification tree that predicts the 'complete' variable using the caret package.
+
+```{r}
+library(caret)
+TRAIN1 <- drop_out_train %>% select(-type)
+TRAIN2 <- TRAIN1[,c(2:10)] #Remove the student_id variable that we do not want to use in the model
+
+#caret does not summarize the metrics we want by default so we have to modify the output
+MySummary  <- function(data, lev = NULL, model = NULL){
+  df <- defaultSummary(data, lev, model)
+  tc <- twoClassSummary(data, lev, model)
+  pr <- prSummary(data, lev, model)
+  out <- c(df,tc,pr)
+  out}
+
+#Define the control elements we would like to use
+ctrl <- trainControl(method = "repeatedcv", #Tell caret to perform k-fold cross validation
+                repeats = 3, #Tell caret to repeat each fold three times
+                classProbs = TRUE, #Calculate class probabilities
+                summaryFunction = MySummary)
+
+#Define the model
+#install.packages('e1071', dependencies=TRUE)
+#install.packages('MLmetrics', dependencies=TRUE)
+
+cartFit <- train(complete ~ ., #Define which variable to predict 
+                data = TRAIN2, #Define the data set to train the model on
+                trControl = ctrl, #Tell caret the control elements
+                method = "rpart", #Define the model type
+                metric = "Accuracy", #Final model choice is made according to sensitivity
+                preProc = c("center", "scale")) #Center and scale the data to minimize the 
+
+#Check the results
+cartFit$finalModel
+plot(cartFit$finalModel)
+text(cartFit$finalModel)
+cartFit
+```
+
+```{r}
+#install.packages(rpart.plot)
+library(rpart.plot)
+rpart.plot(cartFit$finalModel)
+print(cartFit)
+```
+
+Attributes of the tree and my thoughts on the model:
+
+The important attributes from this model are year, courses taken and two specific course IDs. 
+1. It is clear that everyone enrolled in the course for 0 years are considered as completing students, which makes it a very good predictor of completion. As the number os years enrolled increases, the chances of completing reduce.
+
+2. It is seen that students taking more than a certain number of course enrolled in the courses beginning with 8 have a higher significant dropout number.
+ 
+I feel this is not the best model to use for student performance as it is more efficient for continuous data and the variable we are trying to predict is categorical. Additionally, accuracy may not be the best metric to run the model with as there is varying weightage given to false positives and false negatives in this dataset. based on that sensitivity and specificity would make more sense.
+
+We can use the sensitivity/ specificity metrics to calculate the F1 metric with the formula:
+F1 = 2* (precision * recall)/(precision +recall)
+where recall is the same as sensitivity;
+precision is calculated by
+True Positives/ (True positives + False Positives)
+Note that F1 score is the harmonic mean of precision and recall values.
+
+
+Predicting results from the test data:
+```{r setup, include=TRUE, cache = FALSE}
+library(caret)
+TEST2 <- drop_out_test[,c(2:10)] #Remove the student_id variable that we do not want to use in the model
+
+#Generate prediction using previously trained model
+cartClasses <- predict(cartFit,TEST2)
+
+#Generate model statistics
+confusionMatrix(data = cartClasses, as.factor(TEST2$complete))
+```
+The model's metric is still not the best to predict student performance. Accuracy is 88%, specificity is 99% but sensitivity is very low at around 60%.  but sensitivity and specificity of the model were quite different. However, the sensitivity was just 68%. With a false negative of 178 students 178 students out of 444 students who did not complete the course, the prediction would be inaccurate by a large number. If this inflation was consistent across years/semesters, it can be used to offset the results and make the model more meaningful in its prediction. 
+## Conditional Inference Trees
+```{r}
+library(party)
+```
+Train a Conditional Inference Tree using the `party` package on the same training data and examine your results.
+```{r}
+TRAIN3 <- TRAIN2 %>% select(-enroll_date_time)
+condFit <- ctree(complete~., TRAIN3)
+plot(condFit, tp_args = list(beside = TRUE))
+condFit
+```
+Attributes of the tree and thoughts on the model:
+
+This model has attributes like year, courses taken, course ID, enrollment test results etc. The attribute of year seems to be a very clear predictor of student completion of the course. The other attributes seem to be less impactful.
+
+This plot gives us the splits based completion across different attributes in a branched form, to give us an idea of how each of these attributes affects the prediction of student course completion. From these we can see that the attribute of year is most categorical in predicting student completion and the other attributes are less impactful at predicting.
+
+Testing the new Conditional Inference model by predicting the test data and generating model fit statistics.
+```{r}
+TEST3 <- TEST2 %>% select(-enroll_date_time)
+condClasses <- predict(condFit, newdata = TEST3)
+
+ #Generate model statistics
+ confusionMatrix(data = condClasses, as.factor(TEST3$complete))
+```
+
+C4.5 Vs the C5.0 models:
+1) The C5.0 algorithm has higher accuracy
+2) C5.0 is faster, creating trees more quickly by orders of magnitude 
+3) The memory required for C5.0 is about 10 times less than that of C4.5
+4) Continuous data types
+5) Sampling and cross-validation are easier to integrate
+
+Source: 
+Source: https://rulequest.com/see5-comparison.html
+
+
+Training and testing our data using the C5.0 model:
+
+```{r}
+library(C50)
+```
+
+```{r}
+c50Fit <- C5.0(TRAIN2[,-4] %>% mutate(enroll_date_time = as.numeric(enroll_date_time)), TRAIN2[,4]) 
+#Posix date format must be converted back to numeric for C5.0
+c50Fit %>% summary
+
+CClasses <- predict(c50Fit, newdata = TEST2 %>% mutate(enroll_date_time = as.numeric(enroll_date_time)))
+confusionMatrix(data = CClasses, as.factor(TEST2$complete))
+
+```
+
+## Comparing our three models
+
+caret allows us to compare all three models at once.
+
+```{r, warning = F, message = F}
+condFit <- train(complete ~ ., #Define which variable to predict 
+                 data = TRAIN2, #Define the data set to train the model on
+                 trControl = ctrl, #Tell caret the control elements
+                 method = "ctree", #Define the model type
+                 metric = "Accuracy", #Final model choice is made according to sensitivity
+                 preProc = c("center", "scale"))
+
+c50Fit <- train(complete ~ ., #Define which variable to predict 
+                 data = TRAIN2, #Define the data set to train the model on
+                 trControl = ctrl, #Tell caret the control elements
+                 method = "C5.0", #Define the model type
+                 metric = "Accuracy", #Final model choice is made according to sensitivity
+                 preProc = c("center", "scale")) #Center and scale the data to minimize
+```
+
+
+```{r}
+resamps <-resamples(list(cart = cartFit, condinf = condFit, cfiveo = c50Fit))
+summary(resamps)
+bwplot(resamps)
+```
+
+
+Model summary inferences:
+
+The  summary gives the distributions of the accuracy, ROC, sensitivity, specificity, and other model metrics for each of the three models with 30 re-samplings.
+
+Best model:
+
+While the three models are very similar across performance measures, the conditional inference model has the highest median value in a plurality of categories.
+
+Insights on solving the problem of over-enrollment and important features for prediction:
+
+The branches of the model are directed by by years, course_id, courses taken, and gender. Having been enrolled in a program for more than one year is almost a perfect predictor of dropout in this data. Drop-out rates are influenced by course ids as well, but it is noted that there needs to be further exploration into these courses.
+```{r}
+getwd()
+```
+End
+ 
