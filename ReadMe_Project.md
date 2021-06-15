@@ -5,7 +5,9 @@ I have built three prediction models within the classification tree type, in ord
 
 The data used in this project comes from a university's registrar and is first run through a scatterplot matrix in order to do an initial visualization of the available information.
 
-![Scatterplot](/Users/vidyamadhavan/Desktop/HUDK\ 4050/HUDK\ 4051\ SQL\ +\ Pred/Vidya\ Pred/Prediction-Project---Decision-trees/Images/Scatterplot\ matrix.png)
+### Scatterplot Matrix
+
+<img width="791" alt="Scatterplot matrix" src="https://user-images.githubusercontent.com/70535288/122102276-e45e3d00-ce32-11eb-8c03-71c719ef1746.png">
 
 We notice that for the categorical variables, we are unable to gather meaningful visualization with a scatterplot, hence we use a jitter. Note that complete, our desired variable of interest which denotes if a student completes a course or not, is a categorical variable.
 
